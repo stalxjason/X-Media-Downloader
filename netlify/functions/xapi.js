@@ -53,7 +53,17 @@ const DROP = new Set([
 
 exports.handler = async (event) => {
   const qs0 = event.queryStringParameters || {};
-  const upstreamPath = '/' + (qs0.__p || '');
+
+  // 反代路径有两条来源：redirect 注入的 __p，或原始 URL 里的 /xapi/ 之后部分
+  let rel = qs0.__p || '';
+  if (!rel && event.rawUrl) {
+    const m = /\/xapi\/([^?#]*)/.exec(event.rawUrl);
+    if (m) rel = m[1];
+  }
+  if (!rel && event.path && event.path.startsWith('/xapi/')) {
+    rel = event.path.slice('/xapi/'.length);
+  }
+  const upstreamPath = '/' + rel;
 
   const params = new URLSearchParams(qs0);
   params.delete('__p');
