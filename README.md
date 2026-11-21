@@ -2,6 +2,7 @@
 
 > 上游项目：[**Geek0ne/X-Media-Downloader**](https://github.com/Geek0ne/X-Media-Downloader)
 > 功能说明、截图、部署到 Netlify / Cloudflare Pages 等文档请直接看上游 README，本仓库不再重复。
+> **Fork 版本：v3.4.0**（上游 v3.3 + 接口适配修复）
 
 本 fork 只做两件事：把 X 在 2025-11 更换的新接口适配好，让工具重新可用；补一个可选的本地反向代理，解决浏览器与网络层面的限制。
 
