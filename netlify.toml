@@ -4,6 +4,34 @@
 [build]
   publish = "."
 
+[functions]
+  directory = "netlify/functions"
+
+# ─────────────────────────────────────────────────────────────
+# 反代规则（必须排在 SPA fallback 前面，Netlify 按顺序匹配）
+# ─────────────────────────────────────────────────────────────
+
+# GraphQL：交给 Netlify Function 注入 Cookie / csrf 头
+[[redirects]]
+  from = "/xapi/*"
+  to = "/.netlify/functions/xapi?__p=:splat"
+  status = 200
+  force = true
+
+# 图片：走 Netlify 边缘代理，浏览器无需直连 pbs.twimg.com
+[[redirects]]
+  from = "/m/*"
+  to = "https://pbs.twimg.com/:splat"
+  status = 200
+  force = true
+
+# 视频：同上
+[[redirects]]
+  from = "/v/*"
+  to = "https://video.twimg.com/:splat"
+  status = 200
+  force = true
+
 # SPA 路由 fallback
 [[redirects]]
   from = "/*"
@@ -25,7 +53,6 @@
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
 
-# 静态资源缓存
 [[headers]]
   for = "/manifest.json"
   [headers.values]

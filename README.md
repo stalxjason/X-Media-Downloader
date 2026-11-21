@@ -56,16 +56,10 @@ X 更换前端与 GraphQL 返回结构后，上游 v3.3 直接使用会依次遇
 
 ## 三、快速开始
 
-### 方式 A：纯静态
+> ⚠️ 本 fork 的 `index.html` 把 `API_BASE` 指向了同源路径 `/xapi/graphql`，**必须有一个反代**（本地 `server.js` 或 Netlify Function）才能工作。
+> 纯静态托管（没配反代）会把 `/xapi/*` 回落到 index.html，前端拿到的是 HTML，表现为「拿不到用户 / Cookie 无效 / 已无更多书签」这类误报。
 
-```bash
-python3 -m http.server 8000
-# 打开 http://localhost:8000
-```
-
-适合海外网络，或浏览器已配置代理并且关闭了跨域限制的场景。
-
-### 方式 B：本地反代（推荐，国内网络）
+### 方式 A：本地反代（推荐，国内网络）
 
 ```bash
 # 直连
@@ -83,6 +77,24 @@ XMD_PROXY_HOST=127.0.0.1 XMD_PROXY_PORT=7890 node server.js
 | `XMD_PROXY_HOST` | 空（直连） | 上游 HTTP 代理地址 |
 | `XMD_PROXY_PORT` | `7890` | 上游 HTTP 代理端口 |
 | `XMD_DUMP_DIR` | 空 | 设置后保存最近 5 次媒体时间线响应，便于排查接口变化 |
+
+### 方式 B：Netlify（自带 Serverless 反代）
+
+仓库已包含 `netlify/functions/xapi.js` 与 `netlify.toml` 的三条反代规则：
+
+| 路径 | 处理 |
+|---|---|
+| `/xapi/*` | Netlify Function 转发到 `api.x.com`，注入 Cookie、按 ct0 派生 `x-csrf-token` |
+| `/m/*` | Netlify 边缘代理到 `pbs.twimg.com` |
+| `/v/*` | Netlify 边缘代理到 `video.twimg.com` |
+
+把仓库连到 Netlify 直接部署即可，无需额外配置。
+
+注意：Function 默认 10 秒超时、响应不宜过大；媒体走边缘代理不经过 Function，不受影响。
+
+### 方式 C：其它静态平台
+
+Vercel / Cloudflare Pages 需要自行实现等价的 `/xapi` 反代与 `/m`、`/v` 代理，否则同样会失败（仓库里的 `vercel.json` 目前没有对应规则）。
 
 ## 四、使用
 
