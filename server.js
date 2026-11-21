@@ -144,6 +144,66 @@ function forward(host, method, pathAndQuery, headers, body, cb) {
   conn.end();
 }
 
+// 媒体专用：边收边发，支持 Range/断点，视频可以边下边播
+function forwardStream(host, method, pathAndQuery, headers, clientRes, onHeaders) {
+  const pump = (socket) => {
+    const t = tls.connect({ socket, servername: host, host: socket ? undefined : host, port: socket ? undefined : 443 }, () => {
+      const lines = [method + ' ' + pathAndQuery + ' HTTP/1.1', 'Host: ' + host];
+      for (const k of Object.keys(headers)) lines.push(k + ': ' + headers[k]);
+      lines.push('Connection: close');
+      t.write(lines.join('\r\n') + '\r\n\r\n');
+
+      let buf = Buffer.alloc(0);
+      let started = false;
+      let chunked = false;
+
+      t.on('data', (c) => {
+        if (started) {
+          if (chunked) buf = Buffer.concat([buf, c]);
+          else clientRes.write(c);
+          return;
+        }
+        buf = Buffer.concat([buf, c]);
+        const idx = buf.indexOf('\r\n\r\n');
+        if (idx < 0) return;
+        const meta = parseStatus(buf.subarray(0, idx + 4));
+        chunked = (meta.headers['transfer-encoding'] || '').includes('chunked');
+        const out = {
+          'content-type': meta.headers['content-type'] || 'application/octet-stream',
+          'accept-ranges': meta.headers['accept-ranges'] || 'bytes',
+          'cache-control': 'public, max-age=86400',
+          'access-control-allow-origin': '*',
+        };
+        if (meta.headers['content-length']) out['content-length'] = meta.headers['content-length'];
+        if (meta.headers['content-range']) out['content-range'] = meta.headers['content-range'];
+        clientRes.writeHead(meta.status, out);
+        started = true;
+        const rest = buf.subarray(idx + 4);
+        buf = Buffer.alloc(0);
+        if (chunked) buf = rest; else if (rest.length) clientRes.write(rest);
+        if (onHeaders) onHeaders(meta.status);
+      });
+      t.on('end', () => {
+        try {
+          if (chunked && started) clientRes.write(dechunk(buf));
+          clientRes.end();
+        } catch (e) { /* 客户端已断开忽略 */ }
+      });
+      t.on('error', () => { try { clientRes.end(); } catch (e) {} });
+    });
+    t.on('error', () => { try { clientRes.writeHead(502); clientRes.end('bad gateway'); } catch (e) {} });
+  };
+
+  if (!PROXY_HOST) { pump(null); return; }
+  const conn = http.request({ host: PROXY_HOST, port: PROXY_PORT, method: 'CONNECT', path: host + ':443' });
+  conn.on('connect', (r, socket) => {
+    if (r.statusCode !== 200) { socket.destroy(); clientRes.writeHead(502); clientRes.end('bad gateway'); return; }
+    pump(socket);
+  });
+  conn.on('error', () => { try { clientRes.writeHead(502); clientRes.end('bad gateway'); } catch (e) {} });
+  conn.end();
+}
+
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, 'http://local');
   const p = u.pathname;
@@ -221,23 +281,8 @@ const server = http.createServer((req, res) => {
       if (SKIP_REQ_HEADERS.has(k)) continue;
       h[k] = v;
     }
-    forward(host, 'GET', upstreamPath, h, null, (err, buf) => {
-      if (err) {
-        log('MEDIA', host, 'ERR', String(err));
-        res.writeHead(502);
-        res.end('bad gateway');
-        return;
-      }
-      const meta = parseStatus(buf);
-      let body = buf.subarray(meta.headEnd);
-      if ((meta.headers['transfer-encoding'] || '').includes('chunked')) body = dechunk(body);
-      log('MEDIA', host, meta.status, (Date.now() - started) + 'ms', body.length + 'B');
-      res.writeHead(meta.status, {
-        'content-type': meta.headers['content-type'] || 'application/octet-stream',
-        'cache-control': 'public, max-age=86400',
-        'access-control-allow-origin': '*',
-      });
-      res.end(body);
+    forwardStream(host, 'GET', upstreamPath, h, res, (status) => {
+      log('MEDIA', host, status, (Date.now() - started) + 'ms (stream)');
     });
     return;
   }

@@ -1,7 +1,7 @@
 // X Media Downloader - Service Worker
 // 策略：network-first（API 请求），cache-first（静态资源）
 
-const CACHE_VERSION = 'xmd-v3.4.2';
+const CACHE_VERSION = 'xmd-v3.4.3';
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 
