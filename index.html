@@ -1194,15 +1194,16 @@ $('themeToggle').addEventListener('click', () => {
 // X / Twitter GraphQL API
 // =============================================================================
 const BEARER_TOKEN = 'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
-const API_BASE = 'https://api.x.com/graphql';
+const API_BASE = '/xapi/graphql';
 
 // 内置的 hash 快照。X 换 hash 后用户在「高级设置」里粘新值即可覆盖，
 // 不必改代码。QUERIES 的属性可变，直接赋值生效。
 const DEFAULT_QUERIES = {
-  UserByScreenName: 'GazOglcBvgLigl3ywt6b3x4Qb4OYxqKAhhD1AXgc40K0-7R3qA8iWA',
-  UserMedia: 'dexO_2tohK86JDudXXG3GRxZTrIuKtONB3vYJclbcQoO0JEhIiOtA1HUluB0dYyG',
+  UserByScreenName: 'AMIBMjtxEEATh4z8V9GtRg',
+  UserMedia: 'iTSlWbsmD00dAE7Sk9xvIw',
   Bookmarks: 'vvgIHIejOsbp0Dn5KytkZg',
   Following: '9l9tzqLGQU9eutAJffqqMw',
+  TweetDetail: 'wjV7NuWEsHgTBFfW3zYKzQ',
 };
 
 const QUERY_KEYS = Object.keys(DEFAULT_QUERIES);
@@ -1326,7 +1327,7 @@ async function testQueryHashes() {
       method: 'GET',
       headers: {
         'authorization': `Bearer ${BEARER_TOKEN}`,
-        'cookie': cookie,
+        'x-twitter-cookie': cookie,
         'x-twitter-active-user': 'yes',
         'x-twitter-client-language': 'en',
       },
@@ -1340,7 +1341,7 @@ async function testQueryHashes() {
     }
     const user = data?.data?.user?.result;
     if (user) {
-      setHashStatus(`✓ 正常（查到 @${user.legacy.screen_name}）`, 'success');
+      setHashStatus(`✓ 正常（查到 @${user.core?.screen_name || user.legacy?.screen_name || '?'}）`, 'success');
     } else {
       setHashStatus('⚠️ 接口通了，但没拿到用户 —— 可能 Cookie 有问题', 'error');
     }
@@ -1411,7 +1412,7 @@ function gqlRequest(label, queryName, { variables, features, fieldToggles }, { s
         method: 'GET',
         headers: {
           'authorization': `Bearer ${BEARER_TOKEN}`,
-          'cookie': $('cookieInput').value.trim(),
+          'x-twitter-cookie': $('cookieInput').value.trim(),
           'x-twitter-active-user': 'yes',
           'x-twitter-client-language': 'en',
         },
@@ -1504,7 +1505,7 @@ async function getUserId(username, cookie, attempt = 1) {
       method: 'GET',
       headers: {
         'authorization': `Bearer ${BEARER_TOKEN}`,
-        'cookie': cookie,
+        'x-twitter-cookie': cookie,
         'x-twitter-active-user': 'yes',
         'x-twitter-client-language': 'en',
       },
@@ -1537,10 +1538,12 @@ async function getUserId(username, cookie, attempt = 1) {
         `      · 如果账号确实存在，那多半是 X 接口变了，工具需要更新`
       );
     }
+    const _core = user.core || {};
+    const _legacy = user.legacy || {};
     return {
-      id: user.rest_id,
-      name: user.legacy.name,
-      screenName: user.legacy.screen_name,
+      id: user.rest_id || _legacy.id_str,
+      name: _legacy.name || _core.name || '',
+      screenName: _legacy.screen_name || _core.screen_name || '',
     };
   } catch (e) {
     if (e.name === 'AbortError') throw e;
@@ -1597,7 +1600,7 @@ async function getUserMedia(userId, cookie, count, cursor = null, attempt = 1) {
       method: 'GET',
       headers: {
         'authorization': `Bearer ${BEARER_TOKEN}`,
-        'cookie': cookie,
+        'x-twitter-cookie': cookie,
         'x-twitter-active-user': 'yes',
         'x-twitter-client-language': 'en',
       },
@@ -1710,23 +1713,34 @@ function extractMedia(tweets) {
 
 function flattenTweets(timeline) {
   const tweets = [];
-  const instructions = timeline?.data?.user?.result?.timeline_v2?.timeline?.instructions || [];
+  const instructions = (timeline?.data?.user?.result?.timeline?.timeline?.instructions || timeline?.data?.user?.result?.timeline_v2?.timeline?.instructions || []);
   for (const inst of instructions) {
     if (inst.type === 'TimelineAddEntries') {
       for (const entry of inst.entries || []) {
         const content = entry.content;
-        if (content?.entryType === 'TimelineTimelineItem') {
+        if (!content) continue;
+        if (content.entryType === 'TimelineTimelineItem') {
           const tweetResult = content.itemContent?.tweet_results?.result;
           if (tweetResult) tweets.push(tweetResult);
+        } else if (content.entryType === 'TimelineTimelineModule') {
+          for (const modItem of content.items || []) {
+            const tweetResult = modItem?.item?.itemContent?.tweet_results?.result;
+            if (tweetResult) tweets.push(tweetResult);
+          }
         }
+      }
+    } else if (inst.type === 'TimelineAddToModule') {
+      for (const mi of inst.moduleItems || []) {
+        const tweetResult = mi?.item?.itemContent?.tweet_results?.result;
+        if (tweetResult) tweets.push(tweetResult);
       }
     }
   }
-  return tweets;
+  return tweets.map(t => (t && t.__typename === 'TweetWithVisibilityResults' && t.tweet) ? t.tweet : t);
 }
 
 function getNextCursor(timeline) {
-  const instructions = timeline?.data?.user?.result?.timeline_v2?.timeline?.instructions || [];
+  const instructions = (timeline?.data?.user?.result?.timeline?.timeline?.instructions || timeline?.data?.user?.result?.timeline_v2?.timeline?.instructions || []);
   for (const inst of instructions) {
     if (inst.type === 'TimelineAddEntries') {
       for (const entry of inst.entries || []) {
@@ -1760,10 +1774,15 @@ async function fetchTimeline({ userId, cookie, maxTweets, sinceId }) {
     log(`第 ${pageCount} 页请求 ${count} 条推文...`);
 
     const resp = await getUserMedia(userId, cookie, count, cursor);
-    const tweets = flattenTweets(resp);
+    let tweets = flattenTweets(resp);
     if (tweets.length === 0) {
       log('已无更多推文', 'success');
       break;
+    }
+    // 严格按「最大推文数」截断：X 每页给 18 条，不做截断会超出一整页
+    const room = maxTweets - totalFetched;
+    if (room > 0 && tweets.length > room) {
+      tweets = tweets.slice(0, room);
     }
 
     if (sinceId) {
@@ -2312,9 +2331,22 @@ async function downloadZip() {
     const filename = getFilename(item);
     try {
       $('downloadZipBtn').innerHTML = `<span class="spinner"></span> ${i+1} / ${all.length}`;
-      const resp = await fetch(item.url);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const blob = await resp.blob();
+      let blob = null;
+      let lastErr = null;
+      for (let attempt = 1; attempt <= 3 && !blob; attempt++) {
+        try {
+          const resp = await fetch(item.url, { cache: 'no-store' });
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+          blob = await resp.blob();
+        } catch (e) {
+          lastErr = e;
+          if (attempt < 3) {
+            log(`… 重试 ${attempt}/2: ${filename} (${e.message})`, 'warn');
+            await new Promise(r => setTimeout(r, 1500 * attempt));
+          }
+        }
+      }
+      if (!blob) throw lastErr || new Error('empty response');
       zip.file(filename, blob);
       success++;
     } catch (e) {
@@ -2664,7 +2696,7 @@ async function fetchComments(tweetId) {
     longform_notetweets_inline_media_enabled: true,
     responsive_web_enhance_cards_enabled: false,
   };
-  const url = `https://api.x.com/graphql/BoHLKeBvibdYDiJON7oqTg/TweetDetail?variables=${encodeURIComponent(JSON.stringify(variables))}&features=${encodeURIComponent(JSON.stringify(features))}`;
+  const url = `${API_BASE}/${QUERIES.TweetDetail}/TweetDetail?variables=${encodeURIComponent(JSON.stringify(variables))}&features=${encodeURIComponent(JSON.stringify(features))}`;
   const started = performance.now();
   let resp;
   try {
@@ -2672,7 +2704,7 @@ async function fetchComments(tweetId) {
       method: 'GET',
       headers: {
         'authorization': `Bearer ${BEARER_TOKEN}`,
-        'cookie': $('cookieInput').value.trim(),
+        'x-twitter-cookie': $('cookieInput').value.trim(),
         'x-twitter-active-user': 'yes',
         'x-twitter-client-language': 'en',
       },
@@ -2687,7 +2719,7 @@ async function fetchComments(tweetId) {
 
 function extractComments(timeline) {
   const comments = [];
-  const instructions = timeline?.data?.tweet_result?.tweetResult?.timeline?.instructions || [];
+  const instructions = (timeline?.data?.tweet_result?.tweetResult?.timeline?.instructions || timeline?.data?.tweet_result?.result?.timeline?.instructions || []);
   for (const inst of instructions) {
     if (inst.type === 'TimelineAddEntries') {
       for (const entry of inst.entries || []) {
@@ -2725,7 +2757,7 @@ async function fetchAllComments(tweetId, max = 100) {
     all.push(...comments);
     count += comments.length;
     // 获取下一批
-    const instructions = resp?.data?.tweet_result?.tweetResult?.timeline?.instructions || [];
+    const instructions = (resp?.data?.tweet_result?.tweetResult?.timeline?.instructions || resp?.data?.tweet_result?.result?.timeline?.instructions || []);
     let nextCursor = null;
     for (const inst of instructions) {
       if (inst.type === 'TimelineAddEntries') {
@@ -2899,15 +2931,28 @@ function flattenBookmarksFallback(timeline) {
   const tweets = [];
   const instructions = timeline?.data?.bookmark_timeline_v2?.timeline?.instructions || [];
   for (const inst of instructions) {
-    if (inst.type !== 'TimelineAddEntries') continue;
-    for (const entry of inst.entries || []) {
-      if (entry.content?.entryType === 'TimelineTimelineItem') {
-        const r = entry.content.itemContent?.tweet_results?.result;
-        if (r) tweets.push(r);
+    if (inst.type === 'TimelineAddEntries') {
+      for (const entry of inst.entries || []) {
+        const content = entry.content;
+        if (!content) continue;
+        if (content.entryType === 'TimelineTimelineItem') {
+          const r = content.itemContent?.tweet_results?.result;
+          if (r) tweets.push(r);
+        } else if (content.entryType === 'TimelineTimelineModule') {
+          for (const mi of content.items || []) {
+            const r = mi?.item?.itemContent?.tweet_results?.result;
+            if (r) tweets.push(r);
+          }
+        }
+      }
+    } else if (inst.type === 'TimelineAddToModule') {
+      for (const mi of inst.moduleItems || []) {
+        const tweetResult = mi?.item?.itemContent?.tweet_results?.result;
+        if (tweetResult) tweets.push(tweetResult);
       }
     }
   }
-  return tweets;
+  return tweets.map(t => (t && t.__typename === 'TweetWithVisibilityResults' && t.tweet) ? t.tweet : t);
 }
 
 // =============================================================================
@@ -3006,8 +3051,11 @@ function extractFollowingFallback(timeline) {
   for (const inst of instructions) {
     if (inst.type !== 'TimelineAddEntries') continue;
     for (const entry of inst.entries || []) {
-      if (entry.content?.entryType === 'TimelineTimelineItem') {
-        const u = entry.content.itemContent?.user_results?.result;
+      if (entry.content?.entryType !== 'TimelineTimelineItem' && entry.content?.entryType !== 'TimelineTimelineModule') continue;
+      {
+        const u = entry.content.entryType === 'TimelineTimelineModule'
+          ? entry.content.items?.[0]?.item?.itemContent?.user_results?.result
+          : entry.content.itemContent?.user_results?.result;
         if (u?.legacy) {
           users.push({
             id: u.rest_id,
