@@ -92,6 +92,15 @@ XMD_PROXY_HOST=127.0.0.1 XMD_PROXY_PORT=7890 node server.js
 
 注意：Function 默认 10 秒超时、响应不宜过大；媒体走边缘代理不经过 Function，不受影响。
 
+部署后自检（浏览器地址栏直接打开）：
+
+| 地址 | 期望 |
+|---|---|
+| `/xapi/graphql/x/y` | 返回 JSON（如 `{"message":"Query not found"}`）—— **不是 HTML** |
+| `/m/media/xxx.jpg` | 返回 404（来自 twimg）—— 说明边缘代理生效 |
+
+如果 `/xapi/...` 返回的是一整页 HTML，说明 rewrite 被 SPA fallback 抢先了，检查 `_redirects` 里反代规则是否排在 `/*` 之前。
+
 ### 方式 C：其它静态平台
 
 Vercel / Cloudflare Pages 需要自行实现等价的 `/xapi` 反代与 `/m`、`/v` 代理，否则同样会失败（仓库里的 `vercel.json` 目前没有对应规则）。
